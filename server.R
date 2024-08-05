@@ -16,9 +16,9 @@ library(cid10)
 
 setores_basico <- censobr::read_tracts(2010, dataset = "Basico")
 
-municipio_data <- read.csv("C:/Users/Edwirges/OneDrive/Área de Trabalho/cd edwirges/data/municipios_data.csv")
+municipio_data <- read.csv("/data/municipios_data.csv")
 
-estado_data <- read.csv("C:/Users/Edwirges/OneDrive/Área de Trabalho/cd edwirges/data/estados_data.csv")
+estado_data <- read.csv("/data/estados_data.csv")
 
 
 municipios <- read_municipality(year=2010) |>
