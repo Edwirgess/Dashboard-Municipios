@@ -12,31 +12,24 @@ library(tmaptools)
 library(microdatasus)
 library(stringr)
 library(cid10)
+library(arrow)
+library(lwgeom)
 
 
 setores_basico <- censobr::read_tracts(2010, dataset = "Basico")
 
-municipio_data <- read.csv("/data/municipios_data.csv")
 
-estado_data <- read.csv("/data/estados_data.csv")
+municipio_data <- open_dataset("data/municipios_data", format = "parquet")
+estado_data <- open_dataset("data/estados_data", format = "parquet")
 
-
-municipios <- read_municipality(year=2010) |>
+municipios_geo <- read_municipality(year=2010) |>
   mutate(code_muni6 = as.double(str_sub(code_muni, end = 6)))
 
-estados <- read_state(year = 2010)
+estados_geo <- read_state(year = 2010)
 
+estados_sigla <- estados_geo$abbrev_state |> sort()
 
-municipios <- municipios |>
-  left_join(municipio_data, by = "code_muni6") |>
-  st_as_sf()
-
-estados <- estados |>
-  left_join(estado_data, "code_state") |>
-  st_as_sf()
-
-estados_sigla <- estados$abbrev_state |> sort()
-##
+#server
 
 server <- function(input, output, session) {
   
@@ -53,46 +46,55 @@ server <- function(input, output, session) {
                    selected = "Todos")
   })
   
-  populacao <- reactive({
-    estado_sel <- input$estado
-    if (is.null(estado_sel) || estado_sel == "Todos") {
-      estados
-    } else {
-      filter(municipios, abbrev_state == estado_sel)
-    }
+  output$selectVar <- renderUI({
+    selectizeInput("var_select", "Selecione a Variável:",
+                   choices = c("Residentes", "Domicilios", "Óbitos"),
+                   selected = "Residentes")
   })
+  #Filtro
   
   filt_data <- reactive({
     estado_sel <- input$estado
     subcat_sel <- input$descrabrev_filter
-    if (is.null(estado_sel) || estado_sel == "Todos") {
-      data_f <- estados
-      if (!is.null(subcat_sel) && subcat_sel != "Todos") {
-        data_f <- filter(data_f, cid == subcat_sel)
-      }
-      data_f <- data_f |>
-        group_by(name_state, abbrev_state) |>
-        summarise(
-          domicilios = sum(domicilios),
-          residentes = sum(residentes),
-          obitos = sum(obitos)
-        )
-      data_f
-    } else {
-      data_f <- filter(municipios, abbrev_state == estado_sel)
-      if (!is.null(subcat_sel) && subcat_sel != "Todos") {
-        data_f <- filter(data_f, cid == subcat_sel)
-      }
-      data_f <- data_f |>
-        group_by(name_muni, abbrev_state) |>
-        summarise(
-          domicilios = sum(domicilios),
-          residentes = sum(residentes),
-          obitos = sum(obitos)
-        )
-      data_f
-    }
     
+    if (is.null(estado_sel) || estado_sel == "Todos") {
+      data_f <- estado_data
+      if (!is.null(subcat_sel) && subcat_sel != "Todos") {
+        data_f <- filter(data_f, cid == subcat_sel)
+      }
+      
+      data_f <- data_f |>
+        group_by(code_state) |>
+        summarise(
+          domicilios = sum(domicilios),
+          residentes = sum(residentes),
+          obitos = sum(obitos)
+        ) |>
+        collect()
+      data_f <- estados_geo |>
+        left_join(data_f, "code_state") |>
+        st_as_sf()
+      
+    } else {
+      data_f <- filter(municipio_data, abbrev_state == estado_sel)
+      
+      if (!is.null(subcat_sel) && subcat_sel != "Todos") {
+        data_f <- filter(data_f, cid == subcat_sel)
+      }
+      
+      data_f <- data_f |>
+        group_by(code_muni6) |>
+        summarise(
+          domicilios = sum(domicilios),
+          residentes = sum(residentes),
+          obitos = sum(obitos)
+        ) |>
+        collect()
+      data_f <- municipios_geo |>
+        left_join(data_f, "code_muni6") |>
+        st_as_sf()
+    }
+    data_f
   })
   
   output$popMunDataTable <- renderDataTable({
@@ -113,16 +115,6 @@ server <- function(input, output, session) {
                `Residentes` = residentes,
                `Óbitos` = obitos) |>
         datatable()
-    }
-  })
-  
-  
-  obitos <- reactive({
-    subcat_sel <- input$descrabrev_filter
-    if (is.null(subcat_sel) || subcat_sel == "Todos") {
-      municipios
-    } else {
-      filter(municipios, cid == subcat_sel)
     }
   })
   
@@ -147,36 +139,35 @@ server <- function(input, output, session) {
     }
   })
   
-  
-  
-  
-  #Mapa com tmap
+  #Mapa
   
   output$map <- renderTmap({
     
     tmap_options(check.and.fix = TRUE)
     
-    res <- populacao()
+    res <- filt_data()
+    
+    selected_var <- input$var_select
     
     
     if ("name_muni" %in% colnames(res)){
       
       tm_shape(res) +
-        tm_polygons("residentes",
+        tm_polygons(selected_var,
                     palette = "viridis",
-                    title = "População",
+                    title = selected_var,
                     popup.vars = c("Nome do municipio" = "name_muni", "Residentes" = "residentes", "Obitos" = "obitos")
         ) +
-        tm_layout(title = "População dos Municípios Brasileiros",
+        tm_layout(title = "Mapa dos Municípios Brasileiros",
                   legend.outside = TRUE)
     } else {
       tm_shape(res) +
-        tm_polygons("residentes",
+        tm_polygons(selected_var,
                     palette = "viridis",
-                    title = "População",
+                    title = selected_var,
                     popup.vars = c("Nome do estado" = "name_state", "Residentes" = "residentes")
         ) +
-        tm_layout(title = "População dos Estados Brasileiros",
+        tm_layout(title = "Mapa dos Estados Brasileiros",
                   legend.outside = TRUE)
     }
     

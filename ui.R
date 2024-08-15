@@ -19,6 +19,7 @@ ui <- dashboardPage(
               )),
       tabItem(tabName = "map",
               fluidRow(
+                box(width = 12, uiOutput("selectVar")),
                 box(width = 12,  tmapOutput("map", height = "800px"))
               )),
       tabItem(tabName = "obitos",
