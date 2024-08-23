@@ -19,15 +19,21 @@ library(lwgeom)
 setores_basico <- censobr::read_tracts(2010, dataset = "Basico")
 
 
-municipio_data <- open_dataset("data/municipios_data", format = "parquet")
-estado_data <- open_dataset("data/estados_data", format = "parquet")
+municipio_data <- open_dataset("../Dashboard-Municipios/data/municipios_data", format = "parquet")
+estado_data <- open_dataset("../Dashboard-Municipios/data/estados_data", format = "parquet")
+
+estado_data <- estado_data |>
+  mutate(code_state = as.integer(code_state))
 
 municipios_geo <- read_municipality(year=2010) |>
-  mutate(code_muni6 = as.double(str_sub(code_muni, end = 6)))
+  mutate(code_muni6 = as.integer(str_sub(code_muni, end = 6)),
+         code_state = as.integer(code_state))
 
-estados_geo <- read_state(year = 2010)
+estados_geo <- read_state(year = 2010) |>
+  mutate(code_state = as.double(code_state)) |>
+  arrange(abbrev_state)
 
-estados_sigla <- estados_geo$abbrev_state |> sort()
+estados_sigla <- setNames(estados_geo$code_state, estados_geo$abbrev_state)
 
 #server
 
@@ -66,17 +72,19 @@ server <- function(input, output, session) {
       data_f <- data_f |>
         group_by(code_state) |>
         summarise(
-          domicilios = sum(domicilios),
-          residentes = sum(residentes),
+          domicilios = min(domicilios, na.rm = TRUE),
+          residentes = min(residentes, na.rm = TRUE),
           obitos = sum(obitos)
         ) |>
         collect()
       data_f <- estados_geo |>
-        left_join(data_f, "code_state") |>
+        right_join(data_f, by = "code_state") |>
         st_as_sf()
       
     } else {
-      data_f <- filter(municipio_data, abbrev_state == estado_sel)
+      estado_sel_dbl <- as.double(estado_sel)
+      data_f <- filter(municipio_data, code_state == estado_sel_dbl) |> collect()
+      print(data_f)
       
       if (!is.null(subcat_sel) && subcat_sel != "Todos") {
         data_f <- filter(data_f, cid == subcat_sel)
@@ -85,14 +93,15 @@ server <- function(input, output, session) {
       data_f <- data_f |>
         group_by(code_muni6) |>
         summarise(
-          domicilios = sum(domicilios),
-          residentes = sum(residentes),
+          domicilios = min(domicilios, na.rm = TRUE),
+          residentes = min(residentes, na.rm = TRUE),
           obitos = sum(obitos)
         ) |>
         collect()
       data_f <- municipios_geo |>
-        left_join(data_f, "code_muni6") |>
+        right_join(data_f, by =  "code_muni6") |>
         st_as_sf()
+      print(data_f)
     }
     data_f
   })
