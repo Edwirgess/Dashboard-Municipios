@@ -14,168 +14,147 @@ library(stringr)
 library(cid10)
 
 
-setores_basico <- censobr::read_tracts(2010, dataset = "Basico")
+municipio_censo <- open_dataset("data/municipios_censo", format = "parquet")
+estado_censo <- open_dataset("data/estados_censo", format = "parquet")
+municipio_mortalidade <- open_dataset("data/municipios_mortalidade", format = "parquet")
+estado_mortalidade <- open_dataset("data/estados_mortalidade", format = "parquet")
+municipios <- readRDS("data/municipios_geo.rds") |>
+  arrange(abbrev_state, name_muni)
+estados <- readRDS("data/estados_geo.rds") |>
+  arrange(name_state)
 
-municipio_data <- read.csv("/data/municipios_data.csv")
+estados_choices <- setNames(c("", estados$code_state),
+                            c("Todos", estados$name_state))
 
-estado_data <- read.csv("/data/estados_data.csv")
+var_choices <- setNames(c("residentes", "domicilios", "obitos"),
+                        c("Residentes", "Domicilios", "Óbitos"))
 
-
-municipios <- read_municipality(year=2010) |>
-  mutate(code_muni6 = as.double(str_sub(code_muni, end = 6)))
-
-estados <- read_state(year = 2010)
-
-
-municipios <- municipios |>
-  left_join(municipio_data, by = "code_muni6") |>
-  st_as_sf()
-
-estados <- estados |>
-  left_join(estado_data, "code_state") |>
-  st_as_sf()
-
-estados_sigla <- estados$abbrev_state |> sort()
-##
+cid_choices <- setNames(c("", cid10::cid_subcat$cid),
+                        c("Todos", cid10::cid_subcat$descrabrev))
 
 server <- function(input, output, session) {
   
   output$selectEstadoOutput <- renderUI({
     selectizeInput(inputId = 'estado',
                    label = "Estado",
-                   choices = c("Todos", estados_sigla))
+                   choices = estados_choices)
   })
   
   output$selectSubcategoria <- renderUI({
-    subcategorias <- setNames(cid_subcat$cid, cid_subcat$descabrev)
-    selectizeInput("descrabrev_filter", "Filtrar por Decrição:",
-                   choices = c("Todos", subcategorias),
-                   selected = "Todos")
+    selectizeInput("descrabrev_filter", "CID-10 Subcategoria",
+                   choices = cid_choices)
   })
   
-  populacao <- reactive({
-    estado_sel <- input$estado
-    if (is.null(estado_sel) || estado_sel == "Todos") {
-      estados
-    } else {
-      filter(municipios, abbrev_state == estado_sel)
-    }
+  output$selectVar <- renderUI({
+    selectizeInput("var_select", "Selecione a Variável:",
+                   choices = var_choices)
   })
   
   filt_data <- reactive({
-    estado_sel <- input$estado
+    cod_estado_sel <- input$estado
     subcat_sel <- input$descrabrev_filter
-    if (is.null(estado_sel) || estado_sel == "Todos") {
-      data_f <- estados
-      if (!is.null(subcat_sel) && subcat_sel != "Todos") {
-        data_f <- filter(data_f, cid == subcat_sel)
-      }
-      data_f <- data_f |>
-        group_by(name_state, abbrev_state) |>
+    if (is.null(cod_estado_sel) || cod_estado_sel == "") {
+      censo_data <- estado_censo |>
+        group_by(code_state) |>
         summarise(
-          domicilios = sum(domicilios),
-          residentes = sum(residentes),
-          obitos = sum(obitos)
-        )
+          domicilios = sum(domicilios, na.rm = TRUE),
+          residentes = sum(residentes, na.rm = TRUE)
+        ) |>
+        collect()
+      
+      mortalidade_data <- estado_mortalidade
+      if (!is.null(subcat_sel) && subcat_sel != "") {
+        mortalidade_data <- filter(mortalidade_data, cid == subcat_sel)
+      }
+      mortalidade_data <- mortalidade_data |>
+        group_by(code_state) |>
+        summarise(obitos = sum(obitos, na.rm = TRUE)) |>
+        collect()
+      
+      data_f <- estados_geo |>
+        right_join(censo_data, by = "code_state") |>
+        left_join(mortalidade_data, by = "code_state") |>
+        replace_na(list(obitos = 0)) |>
+        arrange(name_state)
       data_f
     } else {
-      data_f <- filter(municipios, abbrev_state == estado_sel)
-      if (!is.null(subcat_sel) && subcat_sel != "Todos") {
-        data_f <- filter(data_f, cid == subcat_sel)
-      }
-      data_f <- data_f |>
-        group_by(name_muni, abbrev_state) |>
+      cod_estado_sel_num <- as.numeric(cod_estado_sel)
+      censo_data <- municipio_censo |>
+        filter(code_state == cod_estado_sel_num) |>
+        group_by(code_muni6) |>
         summarise(
-          domicilios = sum(domicilios),
-          residentes = sum(residentes),
-          obitos = sum(obitos)
-        )
+          domicilios = sum(domicilios, na.rm = TRUE),
+          residentes = sum(residentes, na.rm = TRUE)
+        ) |>
+        collect()
+      
+      mortalidade_data <- municipio_mortalidade |>
+        filter(code_state == cod_estado_sel_num)
+      if (!is.null(subcat_sel) && subcat_sel != "") {
+        mortalidade_data <- filter(mortalidade_data, cid == subcat_sel)
+      }
+      mortalidade_data <- mortalidade_data |>
+        group_by(code_muni6) |>
+        summarise(obitos = sum(obitos, na.rm = TRUE)) |>
+        collect()
+      
+      data_f <- municipios_geo |>
+        right_join(censo_data, by = "code_muni6") |>
+        left_join(mortalidade_data, by = "code_muni6") |>
+        replace_na(list(obitos = 0)) |>
+        arrange(name_muni)
       data_f
     }
-    
   })
   
-  output$popMunDataTable <- renderDataTable({
+  output$table <- renderDataTable({
     res <- filt_data()
     if ("name_muni" %in% names(res)) {
       as.data.frame(res) |>
-        select(`Nome do municipio` = name_muni,
-               `Sigla da UF` = abbrev_state,
+        select(`UF` = abbrev_state,
+               `Nome do municipio` = name_muni,
                `Domicilios` = domicilios,
                `Residentes` = residentes,
                `Óbitos` = obitos) |>
         datatable()
     }else{
       as.data.frame(res) |>
-        select(`Nome do estado` = name_state,
-               `Sigla da UF` = abbrev_state,
+        select(`UF` = abbrev_state,
+               `Nome do estado` = name_state,
                `Domicilios` = domicilios,
                `Residentes` = residentes,
                `Óbitos` = obitos) |>
         datatable()
     }
   })
-  
-  
-  obitos <- reactive({
-    subcat_sel <- input$descrabrev_filter
-    if (is.null(subcat_sel) || subcat_sel == "Todos") {
-      municipios
-    } else {
-      filter(municipios, cid == subcat_sel)
-    }
-  })
-  
-  output$obitosTable <- renderDataTable({
-    res <- filt_data()
-    if ("name_muni" %in% names(res)) {
-      as.data.frame(res) |>
-        select(`Nome do municipio` = name_muni,
-               `Sigla da UF` = abbrev_state,
-               `Domicilios` = domicilios,
-               `Residentes` = residentes,
-               `Óbitos` = obitos) |>
-        datatable()
-    }else{
-      as.data.frame(res) |>
-        select(`Nome do estado` = name_state,
-               `Sigla da UF` = abbrev_state,
-               `Domicilios` = domicilios,
-               `Residentes` = residentes,
-               `Óbitos` = obitos) |>
-        datatable()
-    }
-  })
-  
-  
-  
   
   #Mapa com tmap
   
   output$map <- renderTmap({
+    validate(
+      need(input$var_select != "", "Carregando...")
+    )
+    selected_var <- input$var_select
     
     tmap_options(check.and.fix = TRUE)
     
-    res <- populacao()
-    
+    res <- filt_data()
     
     if ("name_muni" %in% colnames(res)){
-      
-      tm_shape(res) +
-        tm_polygons("residentes",
+      tm_shape(relocate(res, name_muni)) +
+        tm_polygons(selected_var,
                     palette = "viridis",
-                    title = "População",
-                    popup.vars = c("Nome do municipio" = "name_muni", "Residentes" = "residentes", "Obitos" = "obitos")
+                    title = selected_var,
+                    popup.vars = c(selected_var)
         ) +
         tm_layout(title = "População dos Municípios Brasileiros",
                   legend.outside = TRUE)
     } else {
-      tm_shape(res) +
-        tm_polygons("residentes",
+      tm_shape(relocate(res, name_state)) + 
+        tm_polygons(selected_var,
                     palette = "viridis",
-                    title = "População",
-                    popup.vars = c("Nome do estado" = "name_state", "Residentes" = "residentes")
-        ) +
+                    title = selected_var,
+                    popup.vars = selected_var) +
         tm_layout(title = "População dos Estados Brasileiros",
                   legend.outside = TRUE)
     }
