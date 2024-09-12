@@ -1,3 +1,4 @@
+library(arrow)
 library(censobr)
 library(dplyr)
 library(DT)
@@ -26,8 +27,9 @@ estados <- readRDS("data/estados_geo.rds") |>
 estados_choices <- setNames(c("", estados$code_state),
                             c("Todos", estados$name_state))
 
-var_choices <- setNames(c("residentes", "domicilios", "obitos"),
-                        c("Residentes", "Domicilios", "Óbitos"))
+var_choices <- setNames(c("residentes", "domicilios", "obitos", "mortalidade"),
+                        c("Residentes", "Domicilios", "Óbitos",
+                          "Taxa de mortalidade"))
 
 cid_choices <- setNames(c("", cid10::cid_subcat$cid),
                         c("Todos", cid10::cid_subcat$descrabrev))
@@ -42,7 +44,7 @@ server <- function(input, output, session) {
   
   output$selectSubcategoria <- renderUI({
     selectizeInput("descrabrev_filter", "CID-10 Subcategoria",
-                   choices = cid_choices)
+                   choices = cid_choices, multiple = TRUE)
   })
   
   output$selectVar <- renderUI({
@@ -63,18 +65,19 @@ server <- function(input, output, session) {
         collect()
       
       mortalidade_data <- estado_mortalidade
-      if (!is.null(subcat_sel) && subcat_sel != "") {
-        mortalidade_data <- filter(mortalidade_data, cid == subcat_sel)
+      if (!is.null(subcat_sel)) {# && any(subcat_sel != "")) {
+        mortalidade_data <- filter(mortalidade_data, cid %in% subcat_sel)
       }
       mortalidade_data <- mortalidade_data |>
         group_by(code_state) |>
         summarise(obitos = sum(obitos, na.rm = TRUE)) |>
         collect()
       
-      data_f <- estados_geo |>
+      data_f <- estados |>
         right_join(censo_data, by = "code_state") |>
         left_join(mortalidade_data, by = "code_state") |>
         replace_na(list(obitos = 0)) |>
+        mutate(mortalidade = round(1000 * obitos / residentes, 2)) |>
         arrange(name_state)
       data_f
     } else {
@@ -90,18 +93,20 @@ server <- function(input, output, session) {
       
       mortalidade_data <- municipio_mortalidade |>
         filter(code_state == cod_estado_sel_num)
-      if (!is.null(subcat_sel) && subcat_sel != "") {
-        mortalidade_data <- filter(mortalidade_data, cid == subcat_sel)
+      
+      if (!is.null(subcat_sel)) {# && any(subcat_sel != "")) {
+        mortalidade_data <- filter(mortalidade_data, cid %in% subcat_sel)
       }
       mortalidade_data <- mortalidade_data |>
         group_by(code_muni6) |>
         summarise(obitos = sum(obitos, na.rm = TRUE)) |>
         collect()
       
-      data_f <- municipios_geo |>
+      data_f <- municipios |>
         right_join(censo_data, by = "code_muni6") |>
         left_join(mortalidade_data, by = "code_muni6") |>
         replace_na(list(obitos = 0)) |>
+        mutate(mortalidade = round(1000 * obitos / residentes, 2)) |>
         arrange(name_muni)
       data_f
     }
@@ -115,7 +120,8 @@ server <- function(input, output, session) {
                `Nome do municipio` = name_muni,
                `Domicilios` = domicilios,
                `Residentes` = residentes,
-               `Óbitos` = obitos) |>
+               `Óbitos` = obitos,
+               `Taxa de Mortalidade` = mortalidade) |>
         datatable()
     }else{
       as.data.frame(res) |>
@@ -123,7 +129,8 @@ server <- function(input, output, session) {
                `Nome do estado` = name_state,
                `Domicilios` = domicilios,
                `Residentes` = residentes,
-               `Óbitos` = obitos) |>
+               `Óbitos` = obitos,
+               `Taxa de Mortalidade` = mortalidade) |>
         datatable()
     }
   })
