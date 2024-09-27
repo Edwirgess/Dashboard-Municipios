@@ -4,12 +4,13 @@ library(tmap)
 ui <- dashboardPage(
   dashboardHeader(title = "Municípios do Brasil"),
   dashboardSidebar(
-    uiOutput("selectEstadoOutput"),
-    uiOutput("selectSubcategoria"),
+    
     sidebarMenu(
-      menuItem("Tabela", tabName = "table", icon = icon("table")),
-      menuItem("Mapa", tabName = "map", icon = icon("map"))
-    )
+      menuItem("Mapa", tabName = "map", icon = icon("map")),
+      menuItem("Tabela", tabName = "table", icon = icon("table"))
+    ),
+    uiOutput("selectEstadoOutput"),
+    uiOutput("selectSubcategoria")
   ),
   dashboardBody(
     tabItems(
